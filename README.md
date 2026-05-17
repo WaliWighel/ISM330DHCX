@@ -21,8 +21,8 @@ Configure your STM32CubeMX SPI peripheral with these settings:
 ```
 Mode:              Full-Duplex Master
 Data Size:         8-bit
-Clock Polarity:    High (CPOL=1)
-Clock Phase:       2 Edge (CPHA=1)
+Clock Polarity:    Low (CPOL=0)
+Clock Phase:       1 Edge (CPHA=0)
 Clock Speed:       ≤10 MHz (required by ISM330DHCX)
 NSS:               Software (manual CS control)
 ```
@@ -34,13 +34,12 @@ NSS:               Software (manual CS control)
 | Pin | Purpose | Configuration | Notes |
 |-----|---------|---|---|
 | CS (NSS) | Chip Select | Output, Push-Pull | Manually controlled in driver |
-| CLK | Clock | Alternate Function | **Must have Pull-Up enabled** |
+| CLK | Clock | Alternate Function |
 | MOSI | Master Out | Alternate Function | |
 | MISO | Master In | Alternate Function | |
 | INT1 | Data Ready Interrupt | Input, External Interrupt | Recommended for DMA operation |
 | INT2 | Interrupt 2 | Input | Not currently supported by driver |
 
-⚠️ **Important**: The SPI_CLK pin **requires Pull-Up configuration**. Without it, the sensor will not respond to communication attempts.
 
 ### DMA Configuration
 
