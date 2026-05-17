@@ -54,7 +54,6 @@ Enable DMA for SPI6 (or your SPI instance):
 ### NVIC Configuration
 
 Enable interrupts in NVIC:
-- **SPI6 global interrupt**: Enabled
 - **EXTI** (for INT1 pin): Enabled with appropriate priority
 
 ### Optional: (SBS)
