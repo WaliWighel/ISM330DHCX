@@ -46,12 +46,10 @@ NSS:               Software (manual CS control)
 
 Enable DMA for SPI6 (or your SPI instance):
 
-| Parameter | Setting |
-|-----------|---------|
-| Mode | Memory to Peripheral and Peripheral to Memory |
-| Priority | High |
-| Data Width | Byte (8-bit) |
-| Increment Address | Memory: Yes, Peripheral: No |
+<img width="1087" height="1025" alt="image" src="https://github.com/user-attachments/assets/63e80ae7-cd9c-4756-ad41-29559e03fa1f" />
+<img width="1087" height="1025" alt="image" src="https://github.com/user-attachments/assets/95ccb4cc-9e78-4b53-b4df-6abc46570759" />
+
+
 
 ### NVIC Configuration
 
