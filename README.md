@@ -213,9 +213,8 @@ typedef struct {
 ## Troubleshooting
 
 ### Sensor Not Responding
-- **Verify SPI clock is ≤10 MHz** (most common issue)
+- **Verify SPI clock is ≤10 MHz** 
 - Confirm CS line is properly controlled (manual GPIO toggle)
-- Check SPI_CLK pin has Pull-Up enabled
 - Verify WHO_AM_I register reads 0x6C
 
 ### Data Appears Invalid
@@ -224,9 +223,8 @@ typedef struct {
 - Check that sensor remains powered and properly grounded
 
 ### DMA Transfers Failing
-- Enable SPI6 DMA in NVIC
-- Verify DMA channel is correctly configured
-- Check that data buffers are placed in valid RAM region
+- Verify DMA channels are correctly configured
+- **Check that data buffers are placed in memory avelable to DMA**
 
 ### Intermittent Communication
 - Reduce SPI clock speed (try 5 MHz)
@@ -235,7 +233,7 @@ typedef struct {
 
 ## Memory Placement
 
-Large DMA buffers are placed in RAM1 using the `RAM1` attribute. Ensure your linker script allocates sufficient RAM1 space for sensor data buffers.
+DMA buffers are placed in RAM1 using the `RAM1` attribute. Ensure your linker script allocates sufficient RAM1 space for sensor data buffers.
 
 ## Calibration
 
