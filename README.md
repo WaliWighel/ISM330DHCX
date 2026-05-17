@@ -59,9 +59,9 @@ Enable interrupts in NVIC:
 - **SPI6 global interrupt**: Enabled
 - **EXTI** (for INT1 pin): Enabled with appropriate priority
 
-### Optional: Smart Battery System (SBS)
+### Optional: (SBS)
 
-If your board includes SBS (Smart Battery System) functionality, ensure it is properly configured in STM32CubeMX to avoid I2C conflicts or clock issues that could interfere with SPI communication.
+If your STM32 includes SBS  functionality, ensure it is properly configured in STM32CubeMX.
 
 ## Software Installation
 
