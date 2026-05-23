@@ -6,22 +6,26 @@
 #include "spi.h"
 
 /**
- * ===============================================================================
+ * ==============================================================================
  * ISM330DHCX 6-Axis IMU Driver
  *
- * This driver provides a complete interface for the ST ISM330DHCX
- * Inertial Measurement Unit (gyroscope + accelerometer) sensor.
+ * Minimal, portable driver for the ST ISM330DHCX 3D-gyro + 3D-accel sensor.
  *
- * Key Features:
- * - SPI communication (blocking and DMA modes)
- * - Independent gyro/accel configuration
- * - Raw and scaled data readout
- * - Interrupt configuration support
- * - Sensor calibration support
+ * Features:
+ * - SPI communication (blocking and DMA modes via HAL)
+ * - Independent gyro / accel configuration and scaling
+ * - Blocking and non-blocking (DMA) read paths
+ * - Helper functions for combining raw bytes and producing scaled values
+ * - Basic interrupt configuration hooks
  *
- * Data Format: Little-endian byte ordering
- * SPI Protocol: Standard SPI mode with 8-bit transfers
- * ===============================================================================
+ * Notes / assumptions:
+ * - Data is little-endian (low byte first in registers)
+ * - SPI transfers use 8-bit frames and the sensor's read-bit convention
+ * - Caller is responsible for providing a valid `SPI_HandleTypeDef` and
+ *   ensuring the HAL SPI peripheral and CS pin macros are correctly defined
+ * - Some functions use blocking waits and may block indefinitely on failure
+ *   (see TODOs for timeouts and cache management)
+ * ==============================================================================
  */
 
 // Only for calibration
@@ -29,7 +33,8 @@
 
 // Global variables
 SPI_HandleTypeDef *ISM330DHCX_hspi;
-ISM330DHCX_State ISM330DHCX_Sensor_State;
+volatile static ISM330DHCX_State ISM330DHCX_Sensor_State;
+volatile static ISM330DHCX_AXIS_SCALED_DATA ISM330DHCX_ScaledData;
 
 /**
  * @brief Read a single register from the ISM330DHCX sensor using SPI blocking mode.
@@ -86,13 +91,15 @@ ISM330DHCX_STATUS ISM330DHCX_WriteReg(uint8_t reg, uint8_t data){
 /**
  * @brief Read multiple consecutive bytes from the ISM330DHCX sensor using SPI blocking mode.
  * @details The ISM330DHCX supports auto-increment addressing for burst reads.
- *          Performs (length + 1)-byte SPI transaction: register address and data.
+ *          This performs a single SPI transaction: the first byte is the
+ *          register address and the subsequent bytes are read data.
  * @param reg_start First register address to read from (will be ORed with read flag)
- * @param data Destination buffer for the read bytes
- * @param length Number of bytes to read; buffer must be at least this size
+ * @param data Destination buffer for the read bytes (must be at least `length` bytes)
+ * @param length Number of bytes to read
  * @return ISM330DHCX_OK on success, ISM330DHCX_SPI_ERROR on SPI failure
- * @note Uses VLA (Variable Length Array) for buffer - ensure stack is sufficient
- * @warning Ensure SPI is initialized and data buffer is valid
+ * @note For AVR/embedded toolchains this function uses a VLA (`tx_buff`/`rx_buff`).
+ *       On platforms with limited stack, allocate a static buffer or call in contexts
+ *       where sufficient stack is guaranteed.
  */
 ISM330DHCX_STATUS ISM330DHCX_ReadMultiple(uint8_t reg_start, uint8_t* data, uint16_t length){
     uint8_t tx_buff[length + 1];
@@ -116,11 +123,16 @@ ISM330DHCX_STATUS ISM330DHCX_ReadMultiple(uint8_t reg_start, uint8_t* data, uint
 }
 
 /**
- * @brief Start a non-blocking DMA read of multiple consecutive bytes from the ISM330DHCX sensor.
+ * @brief Start a non-blocking DMA read of multiple consecutive bytes from the sensor.
+ * @details This function prepares a transmit buffer where byte 0 is the register
+ *          address (with read bit) and the remaining bytes are zeros. The HAL
+ *          DMA SPI call will then clock data into the provided `data` buffer.
  * @param reg_start First register address to read from.
- * @param data Destination buffer for the DMA transfer.
- * @param length Number of bytes to read.
- * @return 0 on success, non-zero on error.
+ * @param data Destination buffer for the DMA transfer (caller-owned)
+ * @return ISM330DHCX_OK on success, ISM330DHCX_SPI_ERROR on failure
+ * @note The transmit buffer is placed in `RAM1 static` to accommodate DMA
+ *       placement constraints on some platforms. The caller must ensure the
+ *       `data` buffer remains valid until the `EVENT_SPI_TX_RX_DONE` event.
  */
 ISM330DHCX_STATUS ISM330DHCX_Read13_Start_DMA(uint8_t reg_start, uint8_t *data){
     RAM1 static uint8_t tx_buffer[ISM330DHCX_GYRO_AND_ACCEL_READ_SIZE]; 				// Buffer for transmitting register address, should be at least 1 byte for register address + length of data to read
@@ -138,7 +150,10 @@ ISM330DHCX_STATUS ISM330DHCX_Read13_Start_DMA(uint8_t reg_start, uint8_t *data){
 
 /**
  * @brief Stop a non-blocking DMA SPI read and release the sensor CS line.
- * @return 0 on success, non-zero on error.
+ * @details Releases the chip-select and leaves a note to handle data cache
+ *          coherency if D-cache is enabled on the MCU. The D-Cache invalidation
+ *          call is platform-specific and remains TODO here.
+ * @return ISM330DHCX_OK on success
  */
 ISM330DHCX_STATUS ISM330DHCX_ReadMultiple_Stop_DMA(void){
     ISM330DHCX_CS_1;
@@ -161,11 +176,13 @@ ISM330DHCX_STATUS ISM330DHCX_INT1_IRQHandler(void){
 }
 
 /**
- * @brief Perform a soft reset of the ISM330DHCX sensor.\n * @details Initiates a soft reset by setting the SWRESET bit in CTRL3_C register,
- *          then waits for the bit to auto-clear (indicates reset complete).
+ * @brief Perform a soft reset of the ISM330DHCX sensor.
+ * @details Initiates a soft reset by setting the SWRESET bit in CTRL3_C register
+ *          and polls the register until the bit clears, indicating the reset
+ *          sequence is complete. A short stabilization delay follows.
  * @return ISM330DHCX_OK on success
- * @note All registers are reset to default values
-n * @note Delays 100ms after reset for sensor stabilization
+ * @note All registers are reset to their default values by the sensor.
+ * @note Delays 100 ms after reset to allow internal rails/filters to stabilize.
  */
 ISM330DHCX_STATUS ISM330DHCX_Reset(void) {
 	uint8_t temp = ISM330DHCX_CTRL3_C_SWRESET;
@@ -223,7 +240,7 @@ ISM330DHCX_STATUS ISM330DHCX_Init(SPI_HandleTypeDef *hspi){
     ISM330DHCX_ConfigurationMode(1);
     /*	Configuration start */
 
-    ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL3_C, 0x04);
+    ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL3_C, 0x44);
     ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL4_C, 0x02);
 
     ISM330DHCX_GYRO_CONFIG(ODR_6_66kHz, FS_1000dps, 0, 0);
@@ -234,7 +251,7 @@ ISM330DHCX_STATUS ISM330DHCX_Init(SPI_HandleTypeDef *hspi){
     ISM330DHCX_GetGyroOffset(&offset_data);
 #endif
 
-    ISM330DHCX_IRQ_CONFIG(0x03, 0x00);
+    ISM330DHCX_IRQ_CONFIG(0x02, 0x00);
 
     /*	Configuration end	*/
     ISM330DHCX_ConfigurationMode(0);
@@ -297,6 +314,7 @@ ISM330DHCX_STATUS ISM330DHCX_GYRO_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_GYRO_FS 
             break;
         case FS_1000dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 1000.0f;
+            ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale       = 1000.0f / 32768.0f;
             break;
         case FS_2000dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 2000.0f;
@@ -352,6 +370,7 @@ ISM330DHCX_STATUS ISM330DHCX_ACCEL_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_ACCEL_F
             break;
         case FS_4g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 4.0f;
+            ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale = 4.0f / 32768.0f;
             break;
         case FS_8g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 8.0f;
@@ -367,6 +386,22 @@ ISM330DHCX_STATUS ISM330DHCX_ACCEL_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_ACCEL_F
 }
 
 
+
+/**
+ * @brief Configure interrupt routing for INT1 and INT2 pins.
+ * @details Writes provided values to the `INT1_CTRL` and `INT2_CTRL` registers.
+ *          To avoid race conditions with interrupt handlers, global interrupts are
+ *          briefly disabled while writing and verifying each register. Each
+ *          write is verified by a read-back; on mismatch the function returns an
+ *          error and leaves global interrupts enabled.
+ * @param int1 Value to write into `INT1_CTRL` register (bit-field configuration)
+ * @param int2 Value to write into `INT2_CTRL` register (bit-field configuration)
+ * @return ISM330DHCX_OK on success,
+ *         ISM330DHCX_REG_ACCESS_ERROR on communication or verification failure
+ * @note Keep the values short and avoid long-running operations while interrupts
+ *       are disabled. This function assumes register read/write primitives handle
+ *       chip-select and SPI errors.
+ */
 ISM330DHCX_STATUS ISM330DHCX_IRQ_CONFIG(uint8_t int1, uint8_t int2) {
 	uint8_t r_reg = 0;
 
@@ -429,6 +464,34 @@ ISM330DHCX_STATUS ISM330DHCX_COMBINE_RAW_DATA(uint8_t* data_in, ISM330DHCX_AXIS_
     return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_OK; // Success
 }
 
+
+/**
+ * @brief Scale raw sensor integer samples into physical units.
+ * @details Converts the last-read raw integer samples stored in
+ *          `ISM330DHCX_Sensor_State.Raw_Data` into floating-point physical
+ *          values and writes them to the global `ISM330DHCX_ScaledData`.
+ *          Gyro values are converted using `GYRO_Config_Data.Scale` (deg/s per
+ *          LSB) and accelerometer values using `ACCEL_Config_Data.Scale` (g
+ *          per LSB).
+ * @return ISM330DHCX_OK on success. The function updates
+ *         `ISM330DHCX_Sensor_State.Sensor_Status` before returning.
+ * @note Ensure `ISM330DHCX_Sensor_State.Raw_Data` contains up-to-date samples
+ *       and that `*_Config_Data.Scale` fields have been initialized by the
+ *       configuration functions before calling this.
+ */
+ISM330DHCX_STATUS ISM330DHCX_ScaleRawData (void) {
+    ISM330DHCX_ScaledData.Gyro_X = ((float)ISM330DHCX_Sensor_State.Raw_Data.Gyro_X * (float)ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale); 
+    ISM330DHCX_ScaledData.Gyro_Y = ((float)ISM330DHCX_Sensor_State.Raw_Data.Gyro_Y * (float)ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale);
+    ISM330DHCX_ScaledData.Gyro_Z = ((float)ISM330DHCX_Sensor_State.Raw_Data.Gyro_Z * (float)ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale);
+
+    // Convert raw data to physical [g]
+    ISM330DHCX_ScaledData.Accel_X = ((float)ISM330DHCX_Sensor_State.Raw_Data.Accel_X * (float)ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale);
+    ISM330DHCX_ScaledData.Accel_Y = ((float)ISM330DHCX_Sensor_State.Raw_Data.Accel_Y * (float)ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale);
+    ISM330DHCX_ScaledData.Accel_Z = ((float)ISM330DHCX_Sensor_State.Raw_Data.Accel_Z * (float)ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale);
+
+    return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_OK; // Success
+}
+
 /**
  * @brief Read raw gyro and accelerometer data from the ISM330DHCX sensor using blocking SPI.
  * @details Waits for new data availability status, then reads all 12 bytes (6 gyro + 6 accel)
@@ -485,6 +548,8 @@ ISM330DHCX_STATUS ISM330DHCX_GET_GYRO_AND_ACC_DMA(Event_t event){
 
                 ISM330DHCX_COMBINE_RAW_DATA(&SPI_RX_DMA_BUFFER[1], &ISM330DHCX_Sensor_State.Raw_Data);
 
+                ISM330DHCX_ScaleRawData();
+
                 Stage = ISM_STAGE_IDLE;
 
                 return TS_END_WITH_SUCCESS;
@@ -501,32 +566,38 @@ ISM330DHCX_STATUS ISM330DHCX_GET_GYRO_AND_ACC_DMA(Event_t event){
  * @param scaled_data Output structure to receive scaled axis values.
  * @return 0 on success.
  */
-ISM330DHCX_STATUS ISM330DHCX_GET_Scaled_GYRO_AND_ACC(ISM330DHCX_AXIS_SCALED_DATA *scaled_data){
+ISM330DHCX_STATUS ISM330DHCX_GET_Scaled_GYRO_AND_ACC(ISM330DHCX_AXIS_SCALED_DATA *scaled_data) { 
     // Convert raw data to physical [deg/s]
-    scaled_data->Gyro_X = ((float)ISM330DHCX_Sensor_State.Raw_Data.Gyro_X * (float)ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity / 32768.0f); 
-    scaled_data->Gyro_Y = ((float)ISM330DHCX_Sensor_State.Raw_Data.Gyro_Y * (float)ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity / 32768.0f);
-    scaled_data->Gyro_Z = ((float)ISM330DHCX_Sensor_State.Raw_Data.Gyro_Z * (float)ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity / 32768.0f);
+    scaled_data->Gyro_X = ISM330DHCX_ScaledData.Gyro_X; 
+    scaled_data->Gyro_Y = ISM330DHCX_ScaledData.Gyro_Y;
+    scaled_data->Gyro_Z = ISM330DHCX_ScaledData.Gyro_Z;
 
     // Convert raw data to physical [g]
-    scaled_data->Accel_X = ((float)ISM330DHCX_Sensor_State.Raw_Data.Accel_X * (float)ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity / 32768.0f);
-    scaled_data->Accel_Y = ((float)ISM330DHCX_Sensor_State.Raw_Data.Accel_Y * (float)ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity / 32768.0f);
-    scaled_data->Accel_Z = ((float)ISM330DHCX_Sensor_State.Raw_Data.Accel_Z * (float)ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity / 32768.0f);
+    scaled_data->Accel_X = ISM330DHCX_ScaledData.Accel_X;
+    scaled_data->Accel_Y = ISM330DHCX_ScaledData.Accel_Y;
+    scaled_data->Accel_Z = ISM330DHCX_ScaledData.Accel_Z;
 
     return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_OK; // Success
 }
 
 /**
- * @brief Perform measurment of gyroscope and acc offset
- * @details Collects a large number of samples in stationary position and computes
- *          average values (biases) for calibration. Gyro should not move during this.
- *          This is slower but more accurate for initial system calibration. Use with
- *          debuger to see calculated values.
- * @param offset_data Output pointer to structure that will receive calculated offsets
- *                    in deg/s for gyro and g for accel
+ * @brief Perform measurement of gyroscope and accelerometer offsets (biases).
+ * @details Collects a very large number of samples while the device remains
+ *          stationary, accumulates and averages them to compute sensor biases.
+ *          This routine is intentionally blocking and is intended for offline
+ *          calibration during development or first power-up.
+ * @param offset_data Output pointer to structure that should receive calculated
+ *                    offsets (in deg/s for gyro and g for accel). NOTE: the
+ *                    current implementation computes averages but does not write
+ *                    them back into `offset_data` — this is likely an omission
+ *                    and should be fixed if offsets are required by callers.
  * @return void
- * @note This function BLOCKS until all samples are collected (takes several seconds),
- * @warning Sensor must remain STATIONARY during calibration
- * @warning For Z-axis accel, expect value close to ±1g depending on sensor orientation
+ * @note This function BLOCKS until all samples are collected; the current sample
+ *       count (5,000,000) is extremely large and will take a long time on an MCU.
+ * @warning Sensor must remain STATIONARY during calibration.
+ * @warning For Z-axis accel, expect a value near ±1 g depending on orientation.
+ * @todo Reduce sample count, write computed averages into `offset_data`, and add
+ *       a progress/status callback or timeout to avoid excessive blocking.
  */
 void ISM330DHCX_GetGyroOffset(ISM330DHCX_AXIS_SCALED_DATA *offset_data){
     ISM330DHCX_AXIS_SCALED_DATA temp = {0};
