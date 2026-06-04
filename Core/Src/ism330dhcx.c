@@ -277,6 +277,13 @@ ISM330DHCX_STATUS ISM330DHCX_Init(SPI_HandleTypeDef *hspi){
  * @note Function verifies that written value matches register read-back
  */
 ISM330DHCX_STATUS ISM330DHCX_GYRO_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_GYRO_FS fs, uint8_t fs_125, uint8_t fs_4000) {
+	if (fs_4000 && fs_125) {
+        return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_ERROR; // Invalid gyro full-scale setting
+    }
+    if (fs_125 || fs_4000) {
+        fs = 0;
+    }
+	
     // Write configuration to sensor
     uint8_t reg_value = (odr << 4) | (fs << 2) | (fs_125 << 1) | fs_4000;
     uint8_t reg_r_value = 0;
