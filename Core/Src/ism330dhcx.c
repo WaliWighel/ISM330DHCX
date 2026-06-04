@@ -277,13 +277,13 @@ ISM330DHCX_STATUS ISM330DHCX_Init(SPI_HandleTypeDef *hspi){
  * @note Function verifies that written value matches register read-back
  */
 ISM330DHCX_STATUS ISM330DHCX_GYRO_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_GYRO_FS fs, uint8_t fs_125, uint8_t fs_4000) {
-	if (fs_4000 && fs_125) {
+    if (fs_4000 && fs_125) {
         return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_ERROR; // Invalid gyro full-scale setting
     }
     if (fs_125 || fs_4000) {
         fs = 0;
     }
-	
+    
     // Write configuration to sensor
     uint8_t reg_value = (odr << 4) | (fs << 2) | (fs_125 << 1) | fs_4000;
     uint8_t reg_r_value = 0;
@@ -321,7 +321,6 @@ ISM330DHCX_STATUS ISM330DHCX_GYRO_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_GYRO_FS 
             break;
         case FS_1000dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 1000.0f;
-            ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale       = 1000.0f / 32768.0f;
             break;
         case FS_2000dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 2000.0f;
@@ -332,6 +331,8 @@ ISM330DHCX_STATUS ISM330DHCX_GYRO_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_GYRO_FS 
         default:
             return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_ERROR; // Invalid gyro full-scale setting
     }
+
+    ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale = ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity / 32768.0f;
 
     return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_OK;
 }
@@ -375,19 +376,24 @@ ISM330DHCX_STATUS ISM330DHCX_ACCEL_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_ACCEL_F
         case FS_2g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 2.0f;
             break;
+
         case FS_4g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 4.0f;
-            ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale = 4.0f / 32768.0f;
             break;
+
         case FS_8g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 8.0f;
             break;
+            
         case FS_16g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 16.0f;
             break;
+
         default:
             return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_ERROR; // Invalid accel full-scale setting
     }
+
+    ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale = ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity / 32768.0f;
 
     return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_OK;
 }
