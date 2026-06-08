@@ -4,6 +4,9 @@
 
 #include "main.h"
 
+#define __PI 3.141592654f
+#define __G  9.8105f
+
 typedef enum {
     ODR_OFF = 0x00,
     ODR_12_5Hz = 0x01,
@@ -38,19 +41,24 @@ typedef struct {
 	ISM330DHCX_ODR odr;
 	ISM330DHCX_ACCEL_FS fs;
     float Sensitivity;
+    float Scale;
+    /* [m/s^2] */
+    float SIScale;
 } ISM330DHCX_XL_Config;
 
 typedef struct {
 	ISM330DHCX_ODR odr;
 	ISM330DHCX_GYRO_FS fs;
 	float Sensitivity;
+	float Scale;
+    /* [rad/s] */
+    float SIScale;
 } ISM330DHCX_G_Config;
 
 
-
 typedef enum{
-    ISM_STAGE_IDLE,
-    ISM_STAGE_SPI_ONGOING,
+    ISM_STAGE_IDLE = 0x00,
+    ISM_STAGE_SPI_ONGOING = 0x01,
 } ISM330DHCX_STAGES_t;
 
 #define ISM330DHCX_CS_0 HAL_GPIO_WritePin(ISM330DHCX_CS_GPIO_Port, ISM330DHCX_CS_Pin, GPIO_PIN_RESET) // Set CS low
