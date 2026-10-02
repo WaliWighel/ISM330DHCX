@@ -1,5 +1,5 @@
-#include "ism330dhcx_defines.h"
-#include "ism330dhcx.h"
+#include "SENSORS/ism330dhcx_defines.h"
+#include "SENSORS/ism330dhcx.h"
 #include "main.h"
 #include <stdint.h>
 #include <string.h>
@@ -26,7 +26,7 @@
  */
 
 // Only for calibration
-// #define ISM330DHCX_CALIBRATION 0
+#define ISM330DHCX_CALIBRATION 
 #define ISM330DHCX_SI_UNITS
 
 
@@ -34,6 +34,7 @@
 SPI_HandleTypeDef *ISM330DHCX_hspi;
 static ISM330DHCX_State ISM330DHCX_Sensor_State;
 static ISM330DHCX_AXIS_SCALED_DATA ISM330DHCX_ScaledData;
+ISM330DHCX_AXIS_SCALED_DATA ISM330DHCX_offsetData;
 
 /**
  * @brief Read a single register from the ISM330DHCX sensor using SPI blocking mode.
@@ -208,6 +209,7 @@ ISM330DHCX_STATUS ISM330DHCX_Init(SPI_HandleTypeDef *hspi){
     // SETUP SPI handle
     ISM330DHCX_hspi = hspi;
 
+    NVIC_DisableIRQ(EXTI7_IRQn);
     ISM330DHCX_Reset();
   
     /* Check device ID */
@@ -223,24 +225,26 @@ ISM330DHCX_STATUS ISM330DHCX_Init(SPI_HandleTypeDef *hspi){
     /*	Configuration start */
 
     ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL3_C, 0x44);
-    /*  
-    * 1. Enables gyroscope digital LPF1 
-    * 2. DRDY_MASK, so irq will fire eaven if data was not read.
-    */
-    ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL4_C, 0x0A); 
+    ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL4_C, 0x0A);
+
+    /* Accelerometer high-performance mode; gyro FTYPE = 2 */
+    ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL6_C, 0x02);
+    /* Gyro high-performance mode; gyro high-pass disabled */
+    ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL7_G, 0x00);
+    /* Accelerometer low-pass path; HPCF_XL = 100: ODR/100 */
+    ISM330DHCX_WriteReg(ISM330DHCX_REG_CTRL8_XL, 0x80);
 
     ISM330DHCX_GYRO_CONFIG(ODR_6_66kHz, FS_2000dps, 0, 0);
-    ISM330DHCX_ACCEL_CONFIG(ODR_6_66kHz, FS_16g, 0);
+    ISM330DHCX_ACCEL_CONFIG(ODR_6_66kHz, FS_16g, 1);
 #ifdef ISM330DHCX_CALIBRATION
-    ISM330DHCX_AXIS_SCALED_DATA offset_data;
-
-    ISM330DHCX_GetGyroOffset(&offset_data);
+    ISM330DHCX_GetGyroOffset(&ISM330DHCX_offsetData);
 #endif
 
     ISM330DHCX_IRQ_CONFIG(0x02, 0x00);
 
     /*	Configuration end	*/
     ISM330DHCX_ConfigurationMode(0);
+    NVIC_EnableIRQ(EXTI7_IRQn);
 
     return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_OK; // Success
 }
@@ -298,27 +302,31 @@ ISM330DHCX_STATUS ISM330DHCX_GYRO_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_GYRO_FS 
     switch (ISM330DHCX_Sensor_State.GYRO_Config_Data.fs) {
         case FS_125dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 125.0f;
+            ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale = 4.375f / 1000.0f;
             break;
         case FS_250dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 250.0f;
+            ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale = 8.75f / 1000.0f;
             break;
         case FS_500dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 500.0f;
+            ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale = 17.5f / 1000.0f;
             break;
         case FS_1000dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 1000.0f;
+            ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale = 35.0f / 1000.0f;
             break;
         case FS_2000dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 2000.0f;
+            ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale = 70.0f / 1000.0f;
             break;
         case FS_4000dps:
             ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity = 4000.0f;
+            ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale = 140.0f / 1000.0f;
             break;
         default:
             return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_ERROR; // Invalid gyro full-scale setting
     }
-
-    ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale = ISM330DHCX_Sensor_State.GYRO_Config_Data.Sensitivity / 32768.0f;
 
     /* for converting to SI uints */
     ISM330DHCX_Sensor_State.GYRO_Config_Data.SIScale = ISM330DHCX_Sensor_State.GYRO_Config_Data.Scale * __PI / 180.0f;
@@ -364,25 +372,28 @@ ISM330DHCX_STATUS ISM330DHCX_ACCEL_CONFIG(ISM330DHCX_ODR odr, ISM330DHCX_ACCEL_F
     switch (ISM330DHCX_Sensor_State.ACCEL_Config_Data.fs) {
         case FS_2g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 2.0f;
+            ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale = 0.061f / 1000.0f;
             break;
 
         case FS_4g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 4.0f;
+            ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale = 0.122f / 1000.0f;
             break;
 
         case FS_8g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 8.0f;
+            ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale = 0.244f / 1000.0f;
             break;
 
         case FS_16g:
             ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity = 16.0f;
+            ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale = 0.488f / 1000.0f;
             break;
 
         default:
             return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_ERROR; // Invalid accel full-scale setting
     }
 
-    ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale = ISM330DHCX_Sensor_State.ACCEL_Config_Data.Sensitivity / 32768.0f;
     /* for converting to SI uints */
     ISM330DHCX_Sensor_State.ACCEL_Config_Data.SIScale = ISM330DHCX_Sensor_State.ACCEL_Config_Data.Scale * __G;
 
@@ -443,12 +454,14 @@ ISM330DHCX_STATUS ISM330DHCX_GET_SENSOR_STATUS(uint8_t* status){
 ISM330DHCX_STATUS ISM330DHCX_COMBINE_RAW_DATA(uint8_t* data_in, ISM330DHCX_AXIS_RAW_DATA *data_out){
     // TODO ISM330DHCX_AXIS_RAW_DATA to array, posible speed up
     // Combine high and low bytes for gyro and accel data
-    data_out->Gyro_X  =  ((int16_t)(data_in[1] << 8)  | data_in[0]);
-    data_out->Gyro_Y  =  ((int16_t)(data_in[3] << 8)  | data_in[2]);
-    data_out->Gyro_Z  =  ((int16_t)(data_in[5] << 8)  | data_in[4]);
-    data_out->Accel_X =  ((int16_t)(data_in[7] << 8)  | data_in[6]);
-    data_out->Accel_Y =  ((int16_t)(data_in[9] << 8)  | data_in[8]);
-    data_out->Accel_Z =  ((int16_t)(data_in[11] << 8) | data_in[10]);
+    // data_out->Gyro_X  =  ((int16_t)(data_in[1] << 8)  | data_in[0]);
+    // data_out->Gyro_Y  =  ((int16_t)(data_in[3] << 8)  | data_in[2]);
+    // data_out->Gyro_Z  =  ((int16_t)(data_in[5] << 8)  | data_in[4]);
+    // data_out->Accel_X =  ((int16_t)(data_in[7] << 8)  | data_in[6]);
+    // data_out->Accel_Y =  ((int16_t)(data_in[9] << 8)  | data_in[8]);
+    // data_out->Accel_Z =  ((int16_t)(data_in[11] << 8) | data_in[10]);
+
+    memcpy(data_out, data_in, 12);
 
     return ISM330DHCX_Sensor_State.Sensor_Status = ISM330DHCX_OK; // Success
 }
@@ -498,7 +511,7 @@ ISM330DHCX_STATUS ISM330DHCX_GET_GYRO_AND_ACC(void){
      uint8_t status = 0;
 
      // wait for new data to be available
-     while(status == 0){ // TODO add timeout to avoid infinite loop in case of communication error
+     while(status == 0) { // TODO add timeout to avoid infinite loop in case of communication error
          if (ISM330DHCX_GET_SENSOR_STATUS(&status) != ISM330DHCX_OK){
              return ISM330DHCX_REG_ACCESS_ERROR; // Communication error
          }
@@ -552,15 +565,15 @@ ISM330DHCX_STATUS ISM330DHCX_GET_GYRO_AND_ACC_DMA(Event_t event){
 
         case ISM_STAGE_SPI_ONGOING:
             if (event == EVENT_SPI_TX_RX_DONE) {
-                uint8_t temp_buff[ISM330DHCX_GYRO_AND_ACCEL_READ_SIZE];
+                // uint8_t temp_buff[ISM330DHCX_GYRO_AND_ACCEL_READ_SIZE];
 
-                ISM330DHCX_ReadMultiple_Stop_DMA(); 
+                ISM330DHCX_ReadMultiple_Stop_DMA();
 
-                for (int i = 0; i < 12; i++) {
-                    temp_buff[i] = SPI_RX_DMA_BUFFER[i + 1]; 
-                }
+                // for (int i = 0; i < 12; i++) {
+                //     temp_buff[i] = SPI_RX_DMA_BUFFER[i + 1];
+                // }
 
-                ISM330DHCX_COMBINE_RAW_DATA(temp_buff, &ISM330DHCX_Sensor_State.Raw_Data);
+                ISM330DHCX_COMBINE_RAW_DATA(&SPI_RX_DMA_BUFFER[1], &ISM330DHCX_Sensor_State.Raw_Data);
 
 #ifdef ISM330DHCX_SI_UNITS
                 ISM330DHCX_ScaleRawDataToSI();
@@ -613,16 +626,20 @@ ISM330DHCX_STATUS ISM330DHCX_GET_Scaled_GYRO_AND_ACC(ISM330DHCX_AXIS_SCALED_DATA
  */
 void ISM330DHCX_GetGyroOffset(ISM330DHCX_AXIS_SCALED_DATA *offset_data){
     ISM330DHCX_AXIS_SCALED_DATA temp = {0};
-    double gx = 0;
-    double gy = 0;
-    double gz = 0;
 
-    double ax = 0;
-    double ay = 0;
-    double az = 0;
+    double gx = 0.0;
+    double gy = 0.0;
+    double gz = 0.0;
 
-    for (uint32_t i = 0; i < 5000000; i++) {
+    double ax = 0.0;
+    double ay = 0.0;
+    double az = 0.0;
+
+    uint32_t samples = 500000;
+
+    for (uint32_t i = 0; i < samples; i++) {
         ISM330DHCX_GET_GYRO_AND_ACC();
+        ISM330DHCX_ScaleRawDataToSI();
         ISM330DHCX_GET_Scaled_GYRO_AND_ACC(&temp);
 
         gx += temp.Gyro_X;
@@ -634,15 +651,12 @@ void ISM330DHCX_GetGyroOffset(ISM330DHCX_AXIS_SCALED_DATA *offset_data){
         az += temp.Accel_Z;
     }
 
-    double gX = gx/(double)5000000;
-    double gY = gy/(double)5000000;
-    double gZ = gz/(double)5000000;
+    offset_data->Gyro_X = gx / samples;
+    offset_data->Gyro_Y = gy / samples;
+    offset_data->Gyro_Z = gz / samples;
 
-    double aX = ax/(double)5000000;
-    double aY = ay/(double)5000000;
-    double aZ = az/(double)5000000;
-
-    /* Compiler happy */
-    gX = gY + gZ + aX + aY + aZ;
-    aZ = gX;
+    offset_data->Accel_X = ax / samples;
+    offset_data->Accel_Y = ay / samples;
+    offset_data->Accel_Z = az / samples;
 }
+
